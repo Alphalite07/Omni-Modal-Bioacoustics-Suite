@@ -1,0 +1,12 @@
+# Environments
+wsl_env/
+win_env/
+
+# PyTorch & Data files
+dataset/
+*.pth
+__pycache__/
+
+# OS generated files
+.DS_Store
+Thumbs.db
