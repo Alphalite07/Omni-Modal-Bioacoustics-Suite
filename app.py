@@ -3,6 +3,9 @@ import matplotlib
 matplotlib.use('Agg')
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+import pandas as pd
+from sklearn.decomposition import PCA
+import plotly.express as px
 import streamlit as st
 import librosa
 import librosa.display
@@ -188,8 +191,7 @@ def run_dual_analysis(model, extractor, pil_image, pool):
                 min_dist, best_match_label, best_match_name, best_match_img = dist, label, ref["name"], ref["image"]
                 
     match_conf = max(0, 100 - (min_dist * 1000))
-    return pred_label, pred_conf, prob_dict, best_match_label, best_match_name, match_conf, best_match_img
-
+    return pred_label, pred_conf, prob_dict, best_match_label, best_match_name, match_conf, best_match_img, features
 # ==========================================
 # 3. AUDIO & BASELINE GENERATORS
 # ==========================================
@@ -221,7 +223,8 @@ def load_baseline_pool(_extractor):
                     try:
                         # Force RGB conversion to prevent RGBA tensor crashes
                         img = Image.open(img_path).convert('RGB')
-                        feats = _extractor(prepare_tensor(img)).cpu().numpy().flatten()
+                        # 🚨 THE FIX: Added .detach() before .cpu()
+                        feats = _extractor(prepare_tensor(img)).detach().cpu().numpy().flatten()
                         if lbl not in pool: pool[lbl] = []
                         pool[lbl].append({"name": f"📸 {file}", "features": feats, "image": img})
                     except Exception as e:
@@ -236,13 +239,78 @@ def load_baseline_pool(_extractor):
                     try:
                         y, sr = librosa.load(wav_path, sr=None)
                         img = audio_to_pil_spectrogram(y, sr, cmap='gray')
-                        feats = _extractor(prepare_tensor(img)).cpu().numpy().flatten()
+                        # 🚨 THE FIX: Added .detach() before .cpu()
+                        feats = _extractor(prepare_tensor(img)).detach().cpu().numpy().flatten()
                         if lbl not in pool: pool[lbl] = []
                         pool[lbl].append({"name": f"🎵 {file}", "features": feats, "image": img})
                     except Exception as e:
                         print(f"Warning: Failed to load baseline audio {file} - {str(e)}")
                         
     return pool
+
+def render_3d_galaxy(pool, target_features=None):
+    st.markdown("### 🌌 3D Neural Feature Galaxy (PCA)")
+    st.caption("This interactive map shows how the AI groups different vocalizations in 3D space based on their structural acoustic signatures.")
+    
+    # 1. Gather all baseline data from your matrix
+    features_list = []
+    labels_list = []
+    names_list = []
+    
+    for label, items in pool.items():
+        for item in items:
+            features_list.append(item['features'])
+            labels_list.append(label)
+            names_list.append(item['name'])
+            
+    # 2. Inject the user's uploaded sound into the data pool (if they uploaded one)
+    if target_features is not None:
+        features_list.append(target_features)
+        labels_list.append("🔴 TARGET SOUND")
+        names_list.append("User Upload")
+
+    # PCA requires at least 3 data points to calculate X, Y, and Z axes.
+    if len(features_list) < 3:
+        st.warning("Not enough data points to map 3D space. Please ensure there are at least 3 images/audio files in your raw folders!")
+        return
+
+    # 3. Compress the massive neural arrays down to 3 dimensions using PCA
+    try:
+        pca = PCA(n_components=3)
+        components = pca.fit_transform(features_list)
+        
+        # 4. Create a DataFrame for Plotly to read
+        df = pd.DataFrame({
+            'X': components[:, 0],
+            'Y': components[:, 1],
+            'Z': components[:, 2],
+            'Class': labels_list,
+            'File': names_list
+        })
+        
+        # 5. Build the 3D Scatter Plot
+        fig = px.scatter_3d(
+            df, x='X', y='Y', z='Z',
+            color='Class',
+            hover_name='File',
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        
+        # Tweak the layout to make it look like a futuristic radar
+        fig.update_layout(
+            template="plotly_dark", 
+            margin=dict(l=0, r=0, b=0, t=0),
+            scene=dict(
+                xaxis_title='Component 1',
+                yaxis_title='Component 2',
+                zaxis_title='Component 3'
+            )
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+    except Exception as e:
+        st.warning(f"Not enough data points to map 3D space yet. Please add more images/audio to your matrix! Error: {e}")
 
 def render_acoustic_profile(y, sr, cmap):
     fig, axes = plt.subplots(3, 1, figsize=(10, 10))
@@ -289,13 +357,13 @@ def process_audio_pro(file_path, silence_thresh, min_length, model, extractor, p
         
         if duration >= min_length:
             ai_img_obj = audio_to_pil_spectrogram(segment, sr, cmap='gray')
-            p_lbl, p_conf, prob_dict, m_lbl, m_name, m_conf, m_img = run_dual_analysis(model, extractor, ai_img_obj, pool)
-            
+            p_lbl, p_conf, prob_dict, m_lbl, m_name, m_conf, m_img, target_feats = run_dual_analysis(model, extractor, ai_img_obj, baseline_pool)
             extracted_clips.append({
                 'audio': segment, 'sr': sr, 'duration': duration, 'id': count,
                 'p_label': p_lbl, 'p_conf': p_conf, 'prob_dict': prob_dict, 
                 'm_label': m_lbl, 'm_conf': m_conf, 'm_name': m_name, 'm_img': m_img,
-                'interval': interval # 🚨 FIX 2: Store interval directly to prevent Numpy Array crashing later
+                'interval': interval, # 🚨 FIX 2: Store interval directly to prevent Numpy Array crashing later
+                'features': target_feats
             })
             valid_intervals.append((interval, p_lbl))
             
@@ -432,7 +500,7 @@ elif st.session_state.app_state == 'MAIN':
                 time.sleep(0.1)
                 
                 img = Image.open(uploaded_file).convert('RGB')
-                p_lbl, p_conf, prob_dict, m_lbl, m_name, m_conf, m_img = run_dual_analysis(model, extractor, img, baseline_pool)
+                p_lbl, p_conf, prob_dict, m_lbl, m_name, m_conf, m_img, target_feats = run_dual_analysis(model, extractor, img, baseline_pool)
                 
                 status_text.text("✅ Analysis Complete! 100%")
                 progress_bar.progress(1.0)
@@ -451,6 +519,10 @@ elif st.session_state.app_state == 'MAIN':
                     df_probs = pd.DataFrame(list(prob_dict.items()), columns=['Class', 'Confidence'])
                     fig = px.bar(df_probs, x='Confidence', y='Class', orientation='h', title="Explainable AI: Softmax Confidence Distribution", color='Confidence', color_continuous_scale='viridis')
                     st.plotly_chart(fig, use_container_width=True)
+                
+                # --- ADD GALAXY CALL HERE FOR IMAGES ---
+                st.divider()
+                render_3d_galaxy(baseline_pool, target_features=target_feats)
 
             elif file_type == 'wav':
                 col_set1, col_set2, col_set3 = st.columns(3)
@@ -525,6 +597,9 @@ elif st.session_state.app_state == 'MAIN':
                             df_probs = pd.DataFrame(list(sel_clip['prob_dict'].items()), columns=['Class', 'Confidence'])
                             fig = px.bar(df_probs, x='Confidence', y='Class', orientation='h', color='Confidence', color_continuous_scale='viridis', height=300)
                             st.plotly_chart(fig, use_container_width=True)
+            
+                        st.divider()
+                        render_3d_galaxy(baseline_pool, target_features=sel_clip['features'])
 
     # --- TAB 2: DEEP ACOUSTIC FORENSICS ---
     with tab2:
@@ -561,7 +636,7 @@ elif st.session_state.app_state == 'MAIN':
                         try:
                             y, sr = librosa.load(path, sr=None)
                             img = audio_to_pil_spectrogram(y, sr, cmap='gray') 
-                            p_lbl, p_conf, _, m_lbl, m_name, m_conf, _ = run_dual_analysis(model, extractor, img, baseline_pool)
+                            p_lbl, p_conf, _, m_lbl, m_name, m_conf, _, _ = run_dual_analysis(model, extractor, img, baseline_pool)
                             results.append({
                                 "File": os.path.basename(path), "Prediction": p_lbl.upper(), "Pred_Conf": round(p_conf, 2),
                                 "Best_Match": m_name, "Match_Score": round(m_conf, 2)
