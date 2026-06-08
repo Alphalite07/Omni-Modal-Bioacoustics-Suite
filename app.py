@@ -11,6 +11,12 @@ import librosa
 import librosa.display
 import soundfile as sf
 import numpy as np
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
+import av
+from ultralytics import YOLO
+import cv2
+import tempfile
+import moviepy.editor as mp
 import noisereduce as nr
 import pandas as pd
 import zipfile
@@ -33,6 +39,34 @@ import copy
 # 0. SYSTEM CONFIGURATION & STATE
 # ==========================================
 st.set_page_config(page_title="Bioacoustics Enterprise Suite", page_icon="🧬", layout="wide")
+# --- CUSTOM ENTERPRISE STYLING ---
+st.markdown("""
+    <style>
+        /* Hide the default Streamlit hamburger menu and footer */
+        #MainMenu {visibility: visible;}
+        footer {visibility: visible;}
+        header {visibility: visible;}
+        
+        /* Modernize the buttons with rounded edges and hover animations */
+        .stButton>button {
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            font-weight: 600;
+        }
+        .stButton>button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 240, 255, 0.3);
+            border-color: #00F0FF;
+            color: #00F0FF;
+        }
+        
+        /* Add a subtle glassmorphism effect to the sidebar */
+        [data-testid="stSidebar"] {
+            background-color: rgba(21, 26, 34, 0.8) !important;
+            backdrop-filter: blur(10px);
+        }
+    </style>
+""", unsafe_allow_html=True)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CLASS_NAMES = ['barks', 'growls', 'howls', 'whines'] 
 MODEL_PATH = 'dog_bioacoustics_model.pth'
@@ -149,6 +183,10 @@ def train_pytorch_model(status_text, progress_bar, metrics_box):
 # 2. DUAL AI ENGINE (Predictor + Matcher)
 # ==========================================
 @st.cache_resource
+def load_vision_model():
+    return YOLO('yolov8n.pt')
+
+@st.cache_resource
 def load_ai_engines(model_path='dog_bioacoustics_model.pth'):
     model = models.resnet18(weights=None)
     num_ftrs = model.fc.in_features
@@ -206,10 +244,11 @@ def audio_to_pil_spectrogram(y, sr, cmap='gray'):
     buf = io.BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
     plt.close(fig)
+    plt.close('all')
     buf.seek(0)
     return Image.open(buf).convert('RGB')
 
-@st.cache_data
+@st.cache_resource
 def load_baseline_pool(_extractor):
     pool = {}
     
@@ -357,7 +396,7 @@ def process_audio_pro(file_path, silence_thresh, min_length, model, extractor, p
         
         if duration >= min_length:
             ai_img_obj = audio_to_pil_spectrogram(segment, sr, cmap='gray')
-            p_lbl, p_conf, prob_dict, m_lbl, m_name, m_conf, m_img, target_feats = run_dual_analysis(model, extractor, ai_img_obj, baseline_pool)
+            p_lbl, p_conf, prob_dict, m_lbl, m_name, m_conf, m_img, target_feats = run_dual_analysis(model, extractor, ai_img_obj, pool)
             extracted_clips.append({
                 'audio': segment, 'sr': sr, 'duration': duration, 'id': count,
                 'p_label': p_lbl, 'p_conf': p_conf, 'prob_dict': prob_dict, 
@@ -478,20 +517,56 @@ elif st.session_state.app_state == 'MAIN':
         if st.button("🔄 Reboot System (Retrain)", use_container_width=True):
             st.session_state.app_state = 'BOOT'
             st.rerun()
+        # Add this right under your Reboot System button in the sidebar
+        if st.button("🧹 Flush System Cache", use_container_width=True):
+            st.cache_resource.clear()
+            st.cache_data.clear()
+            st.success("Memory flushed. Rebooting engines...")
+            time.sleep(1)
+            st.rerun()
 
     st.title("🧬 Ultimate Bioacoustics Pro Suite")
-    st.markdown("Enterprise-grade spectral analysis, neural prediction, and structural matching matrix.")
+    st.markdown("Deep Neural Diagnostics for Canine Acoustic Signatures.")
 
-    tab1, tab2, tab3 = st.tabs(["👁️ Omni-Modal Analyzer & Slicer", "🔬 Deep Acoustic Forensics", "📂 Batch Processor"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["👁️ Omni-Modal Analyzer & Slicer", "🔬 Deep Acoustic Forensics", "📂 Batch Processor", "📡 Live Acoustic Radar", "🎥 Omni-Modal Sentinel (Video)"])
 
     # --- TAB 1: OMNI-MODAL ANALYZER & SLICER ---
     with tab1:
         if 'processed' not in st.session_state: st.session_state.processed = False
-        uploaded_file = st.file_uploader("Upload Audio (.wav) or Spectrogram (.jpg/.png)", type=["wav", "jpg", "jpeg", "png"], key="omni")
+        uploaded_file = st.file_uploader("Upload Media (Audio, Video, or Spectrogram)", type=["wav", "jpg", "jpeg", "png", "mp4", "mov", "avi"], key="omni")
 
         if uploaded_file:
             file_type = uploaded_file.name.split('.')[-1].lower()
             st.markdown("---")
+            
+            # --- 🚨 THE NEW VIDEO INTERCEPTOR ---
+            if file_type in ['mp4', 'mov', 'avi']:
+                st.video(uploaded_file)
+                with st.spinner("Extracting audio track from video..."):
+                    # Save video to a temp file so MoviePy can read it
+                    tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+                    tfile.write(uploaded_file.read())
+                    clip = mp.VideoFileClip(tfile.name)
+                    
+                    if clip.audio is None:
+                        st.error("No audio track found in this video.")
+                        st.stop()
+                    
+                    # Strip audio and save it as a temporary .wav
+                    temp_wav_path = tfile.name.replace('.mp4', '.wav')
+                    clip.audio.write_audiofile(temp_wav_path, logger=None)
+                    
+                    # Load the new .wav file into a memory buffer that Streamlit can read
+                    wav_io = io.BytesIO()
+                    with open(temp_wav_path, 'rb') as f:
+                        wav_io.write(f.read())
+                    wav_io.seek(0)
+                    
+                    # 🎩 THE MAGIC TRICK: Overwrite the variables so the rest of Tab 1 thinks it was a .wav!
+                    uploaded_file = wav_io
+                    file_type = 'wav'
+            # ------------------------------------
+
             status_text, progress_bar = st.empty(), st.progress(0)
 
             if file_type in ['jpg', 'jpeg', 'png']:
@@ -533,7 +608,7 @@ elif st.session_state.app_state == 'MAIN':
                 
                 if st.button("🚀 Run Complete Audio Extraction", type="primary"):
                     local_temp = "temp_input.wav"
-                    with open(local_temp, "wb") as f: f.write(uploaded_file.getbuffer())
+                    with open(local_temp, "wb") as f: f.write(uploaded_file.getvalue())
                     
                     clips, y_clean, sr, ivals, df = process_audio_pro(local_temp, silence_thresh, min_length, model, extractor, baseline_pool, status_text, progress_bar, spectrogram_cmap)
                     
@@ -657,3 +732,68 @@ elif st.session_state.app_state == 'MAIN':
                         st.plotly_chart(px.pie(df_batch, names='Match_Class' if 'Match_Class' in df_batch else 'Prediction', title='Structural Match Distribution'), use_container_width=True)
             else:
                 st.error("Invalid directory path.")
+
+    # --- TAB 4: LIVE ACOUSTIC RADAR ---
+    with tab4:
+        st.markdown("### 📡 Real-Time Acoustic Radar")
+        st.markdown("Stream live audio directly from your hardware microphone into the Bioacoustics pipeline.")
+        
+        st.info("⚠️ **WSL Note:** Passing hardware microphones from Windows into WSL Linux can be tricky. If the stream fails to connect, you may need to configure PulseAudio or run this specific module natively on Windows.")
+
+        # Real-time audio processing class
+        class LiveAudioProcessor(AudioProcessorBase):
+            def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
+                # Grab the raw audio array from the live microphone
+                audio_array = frame.to_ndarray()
+                # (In a full production build, this is where we queue the array to be fed into run_dual_analysis)
+                return frame
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**1. Initialize Secure Audio Stream (WebRTC)**")
+            webrtc_streamer(
+                key="live_radar",
+                mode=WebRtcMode.SENDONLY,
+                audio_processor_factory=LiveAudioProcessor,
+                media_stream_constraints={"video": False, "audio": True}
+            )
+        with col2:
+            st.markdown("**2. Live Telemetry**")
+            st.metric("Stream Status", "Awaiting Connection...")
+            st.metric("Buffer Size", "0 frames")
+
+
+    # --- TAB 5: OMNI-MODAL SENTINEL (VISION ONLY) ---
+    with tab5:
+        st.markdown("### 🎥 Omni-Modal Sentinel")
+        st.markdown("Upload a video (`.mp4`). The system will use YOLOv8 to track canine movement across the frames. (Use Tab 1 for video audio analysis!)")
+        
+        video_file = st.file_uploader("Upload Video File", type=['mp4', 'mov', 'avi'], key="vision_only")
+        
+        if video_file is not None:
+            v_col1, v_col2 = st.columns([1, 1])
+            
+            with v_col1:
+                st.video(video_file)
+                
+            if st.button("🚨 Execute Vision Tracking Scan", type="primary"):
+                with st.spinner("Initializing YOLOv8 Neural Architecture..."):
+                    # Save video temporarily for YOLO to read
+                    tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+                    tfile.write(video_file.read())
+                    vid_path = tfile.name
+                    
+                    with v_col2:
+                        st.markdown("#### 👁️ Computer Vision Tracking (YOLOv8)")
+                        try:
+                            # Load lightweight pre-trained YOLO model from RAM
+                            yolo_model = load_vision_model()
+                            
+                            # Run inference on the video (tracking only "dog" class which is ID 16) and force GPU
+                            results = yolo_model(vid_path, classes=[16], device=0, save=True, project="runs", name="detect", exist_ok=True)
+                            
+                            st.success(f"YOLOv8 Vision Scan Complete. Tracked {len(results)} frames containing dogs.")
+                            st.info("Check your local directory under `/runs/detect/` to view the fully rendered `.avi` video with tracking boxes!")
+                            
+                        except Exception as e:
+                            st.error(f"YOLO Vision engine failed to boot: {e}")
