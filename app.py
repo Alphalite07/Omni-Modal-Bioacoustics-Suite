@@ -1,3 +1,5 @@
+import torch
+import torch.nn as nn
 import os
 import matplotlib
 matplotlib.use('Agg')
@@ -36,6 +38,19 @@ import shutil
 import random
 import copy
 
+
+# --- TEMPORAL NEURAL ARCHITECTURE ---
+class CanineBehaviorLSTM(nn.Module):
+    def __init__(self, input_size=34, hidden_size=64, num_classes=4):
+        super(CanineBehaviorLSTM, self).__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers=2, batch_first=True, dropout=0.2)
+        self.fc = nn.Linear(hidden_size, num_classes)
+
+    def forward(self, x):
+        out, (hn, cn) = self.lstm(x)
+        out = self.fc(out[:, -1, :]) 
+        return out
+    
 # ==========================================
 # 0. SYSTEM CONFIGURATION & STATE
 # ==========================================
@@ -844,17 +859,47 @@ elif st.session_state.app_state == 'MAIN':
                             # --- ESTIMATED ETHOGRAM BASELINE ---
                             st.markdown("### 🧬 Estimated Ethogram Baseline (Physics-Based)")
                             st.caption("Based on bounding box velocity and skeletal anchor points.")
+                            # --- 🚨 PHASE 6: LIVE TEMPORAL INFERENCE ---
+                            @st.cache_resource
+                            def load_lstm_brain():
+                                st.toast("Loading PyTorch LSTM into VRAM...")
+                                model = CanineBehaviorLSTM()
+                                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                                # Load the weights you just trained
+                                model.load_state_dict(torch.load('canine_behavior_v1.pth', map_location=device))
+                                model.to(device)
+                                model.eval() # Set to evaluation mode (locks the weights)
+                                return model, device
+
+                            lstm_model, torch_device = load_lstm_brain()
                             
-                            # Mock logic demonstrating how telemetry connects to the 181-point Ethogram
-                            if len(dog_speeds) > 100:
-                                st.warning("**Primary Activity State:** ACTIVE (Ethogram: 19 Walk / 20 Run)")
-                            else:
-                                st.info("**Primary Activity State:** INACTIVE (Ethogram: 8 Sit / 9 Stand)")
+                            # We need exactly 30 frames (1 second) of memory to make a prediction
+                            if len(temporal_tensor) >= 30:
+                                st.info("Feeding trajectory memory into LSTM...")
                                 
-                            st.markdown("---")
-                            st.markdown("**System Output:**")
-                            st.write("1. Open the `/runs/kinematics_canine/` folder to view the generated trajectory video.")
-                            st.write("2. The downloaded `.npy` matrices are ready to be fed into the PyTorch LSTM temporal classifier.")
-                            
+                                # Isolate the last 30 frames of the video
+                                recent_frames = temporal_tensor[-30:]
+                                
+                                # Flatten the 17x2 matrices and format for the neural network
+                                # Shape goes from [30, 17, 2] -> [1, 30, 34]
+                                input_tensor = torch.tensor(recent_frames.reshape(1, 30, 34), dtype=torch.float32).to(torch_device)
+                                
+                                # The AI makes its prediction
+                                with torch.no_grad():
+                                    prediction = lstm_model(input_tensor)
+                                    predicted_class = torch.argmax(prediction, dim=1).item()
+                                    
+                                # Map the math back to the IISER Kolkata Ethogram
+                                ethogram_map = {
+                                    0: "🟢 STAND (Ethogram State: 9)",
+                                    1: "🔵 WALK (Ethogram State: 19)",
+                                    2: "🟡 SIT (Ethogram State: 8)",
+                                    3: "🟣 ROLL/LAY (Ethogram State: 4)"
+                                }
+                                
+                                st.success(f"### 🧠 Neural Prediction: {ethogram_map[predicted_class]}")
+                                
+                            else:
+                                st.warning("Insufficient trajectory data. The LSTM requires at least 1 second (30 frames) of continuous tracking to predict behavior.")
                         except Exception as e:
-                            st.error(f"Kinematic Vision engine failed to boot: {e}")
+                            st.error(f"Kinematic Vision engine failed to execute: {e}")        
