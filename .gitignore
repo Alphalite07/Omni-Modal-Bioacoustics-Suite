@@ -9,4 +9,11 @@ __pycache__/
 
 # OS generated files
 .DS_Store
-Thumbs.db
+Thumbs.db*.pt
+*.pth
+*.npy
+*.mp4
+*.avi
+runs/
+canine_dataset/
+behavior_data/

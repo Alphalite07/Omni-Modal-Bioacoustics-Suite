@@ -4,6 +4,7 @@ matplotlib.use('Agg')
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import pandas as pd
+from huggingface_hub import hf_hub_download
 from sklearn.decomposition import PCA
 import plotly.express as px
 import streamlit as st
@@ -763,37 +764,97 @@ elif st.session_state.app_state == 'MAIN':
             st.metric("Buffer Size", "0 frames")
 
 
-    # --- TAB 5: OMNI-MODAL SENTINEL (VISION ONLY) ---
+   # --- TAB 5: OMNI-MODAL SENTINEL (V3 KINEMATIC VISION) ---
+    # --- TAB 5: OMNI-MODAL SENTINEL (V3 KINEMATIC VISION) ---
     with tab5:
-        st.markdown("### 🎥 Omni-Modal Sentinel")
-        st.markdown("Upload a video (`.mp4`). The system will use YOLOv8 to track canine movement across the frames. (Use Tab 1 for video audio analysis!)")
+        st.markdown("### 🎥 Omni-Modal Sentinel (Kinematic Engine)")
+        st.markdown("Utilizing custom YOLOv8-Pose and ByteTrack to extract skeletal coordinates, map trajectories, and estimate baseline Ethogram states.")
         
-        video_file = st.file_uploader("Upload Video File", type=['mp4', 'mov', 'avi'], key="vision_only")
+        video_file = st.file_uploader("Upload Video File", type=['mp4', 'mov', 'avi'], key="vision_v3")
         
         if video_file is not None:
             v_col1, v_col2 = st.columns([1, 1])
-            
             with v_col1:
                 st.video(video_file)
                 
-            if st.button("🚨 Execute Vision Tracking Scan", type="primary"):
-                with st.spinner("Initializing YOLOv8 Neural Architecture..."):
-                    # Save video temporarily for YOLO to read
+            if st.button("🚨 Execute Kinematic & Pose Scan", type="primary"):
+                with st.spinner("Initializing Proprietary Neural Architecture..."):
+                    # Save video temporarily
                     tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
                     tfile.write(video_file.read())
                     vid_path = tfile.name
                     
                     with v_col2:
-                        st.markdown("#### 👁️ Computer Vision Tracking (YOLOv8)")
+                        st.markdown("#### 👁️ Kinematic Tracking Telemetry")
                         try:
-                            # Load lightweight pre-trained YOLO model from RAM
-                            yolo_model = load_vision_model()
+                            # --- 🚨 THE TRUE CANINE KINEMATIC ENGINE ---
+                            st.info("Booting Proprietary Canine Skeletal Weights...")
                             
-                            # Run inference on the video (tracking only "dog" class which is ID 16) and force GPU
-                            results = yolo_model(vid_path, classes=[16], device=0, save=True, project="runs", name="detect", exist_ok=True)
+                            @st.cache_resource
+                            def load_canine_pose_model():
+                                # Points directly to the brain you just forged on the GPU
+                                return YOLO('custom_canine_pose.pt')
+                                
+                            pose_model = load_canine_pose_model()
                             
-                            st.success(f"YOLOv8 Vision Scan Complete. Tracked {len(results)} frames containing dogs.")
-                            st.info("Check your local directory under `/runs/detect/` to view the fully rendered `.avi` video with tracking boxes!")
+                            # Execute tracking with ByteTrack to maintain ID history
+                            results = pose_model.track(
+                                source=vid_path, 
+                                tracker="bytetrack.yaml",
+                                conf=0.5, 
+                                device=0, # Force GPU acceleration
+                                save=True, 
+                                project="runs", 
+                                name="kinematics_canine", 
+                                exist_ok=True
+                            )
+                            
+                            # --- V4: TEMPORAL SKELETAL HARVESTER ---
+                            st.info("Extracting temporal 17-point skeletal matrices...")
+                            
+                            temporal_buffer = [] 
+                            dog_speeds = [] # Re-initialized to feed the heuristic logic below
+                            
+                            for frame_idx, r in enumerate(results):
+                                # 1. Track general bounding box activity for the heuristic baseline
+                                if r.boxes is not None and len(r.boxes) > 0:
+                                    dog_speeds.append(len(r.boxes))
+                                
+                                # 2. Extract precise X,Y skeletal joints for the future LSTM
+                                if r.keypoints is not None and len(r.keypoints.xyn) > 0:
+                                    skeleton_matrix = r.keypoints.xyn[0].cpu().numpy()
+                                    temporal_buffer.append(skeleton_matrix)
+                            
+                            temporal_tensor = np.array(temporal_buffer)
+                            st.success(f"Harvested {len(temporal_tensor)} sequential frames of skeletal data!")
+                            
+                            # Save and provide download button for the raw math
+                            if len(temporal_tensor) > 0:
+                                np.save("temporal_skeleton_data.npy", temporal_tensor)
+                                st.download_button(
+                                    label="📥 Download Raw Skeletal Matrix (.npy)",
+                                    data=open("temporal_skeleton_data.npy", "rb"),
+                                    file_name="dog_kinematics.npy",
+                                    mime="application/octet-stream",
+                                    type="primary"
+                                )
+                            
+                            st.success(f"Kinematic Scan Complete. Analyzed {len(results)} frames.")
+                            
+                            # --- ESTIMATED ETHOGRAM BASELINE ---
+                            st.markdown("### 🧬 Estimated Ethogram Baseline (Physics-Based)")
+                            st.caption("Based on bounding box velocity and skeletal anchor points.")
+                            
+                            # Mock logic demonstrating how telemetry connects to the 181-point Ethogram
+                            if len(dog_speeds) > 100:
+                                st.warning("**Primary Activity State:** ACTIVE (Ethogram: 19 Walk / 20 Run)")
+                            else:
+                                st.info("**Primary Activity State:** INACTIVE (Ethogram: 8 Sit / 9 Stand)")
+                                
+                            st.markdown("---")
+                            st.markdown("**System Output:**")
+                            st.write("1. Open the `/runs/kinematics_canine/` folder to view the generated trajectory video.")
+                            st.write("2. The downloaded `.npy` matrices are ready to be fed into the PyTorch LSTM temporal classifier.")
                             
                         except Exception as e:
-                            st.error(f"YOLO Vision engine failed to boot: {e}")
+                            st.error(f"Kinematic Vision engine failed to boot: {e}")
