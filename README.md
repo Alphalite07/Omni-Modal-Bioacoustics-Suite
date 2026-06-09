@@ -158,5 +158,5 @@ To prevent neural network mode collapse on highly limited or single-shot dataset
 
 This project is licensed under the MIT License. See the `LICENSE` file for details.
 
-*Disclaimer: This tool is for research and educational purposes. Do not rely solely on neural predictions for critical veterinary or biological diagnostics.*
+*Disclaimer: This tool is for research and educational purposes. Do not rely solely on neural predictions for critical veterinary or biological diagnostics. (Kinda hard doing this alone)*
 
